@@ -3,13 +3,13 @@ mod plugins;
 mod types;
 mod ui;
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use anyrun_interface::PluginRef as Plugin;
 use clap::Parser;
 use gtk::{
     gdk, gio,
-    glib::{self, clone},
+    glib::{self, clone, SourceId},
     prelude::*,
 };
 use log::*;
@@ -201,10 +201,22 @@ fn setup_entry_changed(
     runtime_data: Rc<RefCell<RuntimeData>>,
     plugins: Vec<Plugin>,
 ) {
-    entry.connect_changed(move |e| {
+    let debounce_timeout: Rc<RefCell<Option<SourceId>>> = Rc::new(RefCell::new(None));
+
+    entry.connect_changed(clone!(@strong debounce_timeout => move |e| {
+        if let Some(timeout_id) = debounce_timeout.borrow_mut().take() {
+            timeout_id.remove();
+        }
+
         runtime_data.borrow_mut().exclusive = None;
-        refresh_matches(&e.text(), &plugins, runtime_data.clone());
-    });
+        *debounce_timeout.borrow_mut() = Some(glib::timeout_add_local_once(
+            Duration::from_millis(runtime_data.borrow().config.smooth_input_time),
+            clone!(@weak e, @strong plugins, @weak runtime_data, @strong debounce_timeout => move || {
+                *debounce_timeout.borrow_mut() = None;
+                refresh_matches(&e.text(), &plugins, runtime_data.clone());
+            }),
+        ));
+    }));
 }
 
 fn setup_entry_activated(

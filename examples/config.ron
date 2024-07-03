@@ -54,6 +54,12 @@ Config(
     // Place entry to the bottom
     bottom_entry: false,
 
+    // Time to wait new symbols before refreshing matches list (in millis)
+    // Prevents list to not update if you're typing too fast
+    // I'd recommend to set it about 150-300
+    // Default: 0
+    smooth_input_time: 200,
+
     // List of plugins to be loaded by default, can be specified with a relative path to be loaded from the
     // `<anyrun config dir>/plugins` directory or with an absolute path to just load the file the path points to.
     plugins: [

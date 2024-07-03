@@ -46,6 +46,9 @@ pub struct Config {
     pub layer: Layer,
     #[serde(default)]
     pub bottom_entry: bool,
+
+    #[serde(default)]
+    pub smooth_input_time: u64,
 }
 
 impl Config {
@@ -88,6 +91,7 @@ impl Default for Config {
             layer: Layer::default(),
             bottom_entry: false,
             save_entry_state: false,
+            smooth_input_time: 0,
         }
     }
 }
