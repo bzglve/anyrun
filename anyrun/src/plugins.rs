@@ -4,123 +4,17 @@ use anyrun_interface::{Match, PluginRef as Plugin, PollResult};
 #[allow(unused_imports)]
 use log::*;
 
-use crate::{config::*, types::GMatch};
+use crate::{
+    config::{default_config_dir, RuntimeData},
+    gmatch::GMatch,
+};
 
 use gtk::{
     gio,
     glib::{self, clone},
-    prelude::*,
 };
 
-pub fn build_label(name: &str, use_markup: bool, label: &str) -> gtk::Label {
-    gtk::Label::builder()
-        .name(name)
-        .wrap(true)
-        .xalign(0.0)
-        .use_markup(use_markup)
-        .halign(gtk::Align::Start)
-        .valign(gtk::Align::Center)
-        .vexpand(true)
-        .label(label)
-        .build()
-}
-
-pub fn build_image(icon: &str) -> gtk::Image {
-    let mut match_image = gtk::Image::builder()
-        .name(style_names::MATCH)
-        .pixel_size(32);
-
-    let path = PathBuf::from(icon);
-
-    match_image = if path.is_absolute() {
-        match_image.file(path.to_string_lossy())
-    } else {
-        match_image.icon_name(icon)
-    };
-    match_image.build()
-}
-
-pub fn build_match_box(runtime_data: Rc<RefCell<RuntimeData>>, gmatch: GMatch) -> gtk::Widget {
-    let runtime_data = runtime_data.borrow();
-    let plugin = runtime_data
-        .plugins
-        .get(gmatch.get_plugin_id() as usize)
-        .expect("Can't get plugin by id");
-
-    let hbox = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .height_request(36)
-        .spacing(4)
-        .build();
-
-    let plugin_info_box = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        // .halign(gtk::Align::Center)
-        .width_request(200)
-        .spacing(12)
-        .build();
-
-    let plugin_info = plugin.info()();
-
-    let plugin_icon = build_image(&plugin_info.icon);
-    plugin_icon.set_margin_start(4);
-    plugin_icon.set_margin_end(8);
-    plugin_info_box.append(&plugin_icon);
-
-    plugin_icon.set_visible(!runtime_data.config.hide_plugins_icons && gmatch.get_first());
-
-    let plugin_label = gtk::Label::builder()
-        .label(if gmatch.get_first() {
-            &plugin_info.name
-        } else {
-            ""
-        })
-        .build();
-
-    plugin_info_box.append(&plugin_label);
-
-    plugin_info_box.set_visible(!runtime_data.config.hide_plugin_info);
-
-    hbox.append(&plugin_info_box);
-
-    let match_box = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
-        .build();
-
-    if !runtime_data.config.hide_match_icons {
-        if let Some(icon) = gmatch.get_icon() {
-            match_box.append(&build_image(&icon));
-        }
-    }
-
-    let vbox = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-
-    vbox.append(&build_label(
-        style_names::MATCH_TITLE,
-        gmatch.get_use_pango(),
-        &gmatch.get_title(),
-    ));
-
-    if let Some(desc) = gmatch.get_description() {
-        vbox.append(&build_label(
-            style_names::MATCH_DESC,
-            gmatch.get_use_pango(),
-            &desc,
-        ));
-    }
-
-    match_box.append(&vbox);
-    hbox.append(&match_box);
-
-    hbox.into()
-}
-
-pub fn handle_matches(plugin_id: u64, matches: &[Match], list_store: gio::ListStore) {
+fn handle_matches(plugin_id: u64, matches: &[Match], list_store: gio::ListStore) {
     for (index, rmatch) in matches.iter().enumerate() {
         let gmatch = GMatch::from(rmatch.clone());
         gmatch.set_plugin_id(plugin_id);
@@ -179,11 +73,13 @@ pub fn load_plugin(plugin_path: &PathBuf, config_dir: &PathBuf) -> Plugin {
     plugin
 }
 
-pub fn refresh_matches(input: &str, plugins: &[Plugin], runtime_data: Rc<RefCell<RuntimeData>>) {
+pub fn refresh_matches(input: &str, runtime_data: Rc<RefCell<RuntimeData>>) {
     let list_store = runtime_data.borrow().list_store.clone();
     list_store.remove_all();
 
     let mut exclusive_plugin_id = None;
+
+    let plugins = runtime_data.borrow().plugins.clone();
 
     let plugins_to_use = if let Some(exclusive_plugin) = runtime_data.borrow().exclusive.as_ref() {
         exclusive_plugin_id = plugins
@@ -213,7 +109,7 @@ pub fn refresh_matches(input: &str, plugins: &[Plugin], runtime_data: Rc<RefCell
     }
 }
 
-pub fn async_match<F>(plugin: &Plugin, id: u64, mut func: F) -> glib::ControlFlow
+fn async_match<F>(plugin: &Plugin, id: u64, mut func: F) -> glib::ControlFlow
 where
     F: FnMut(&[Match]),
 {

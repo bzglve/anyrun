@@ -1,9 +1,9 @@
-use std::{cell::RefCell, fs, io, rc::Rc};
+use std::{cell::RefCell, io, rc::Rc, time::Duration};
 
 use anyrun_interface::{HandleResult, Match};
 use gtk::{
-    gdk::{self, Key},
-    glib,
+    gdk::Key,
+    glib::{self, clone, SourceId},
     prelude::*,
 };
 use gtk_layer_shell::LayerShell;
@@ -11,25 +11,46 @@ use log::*;
 
 use crate::{
     config::{style_names, Edge, PostRunAction, RelativeNum, RuntimeData},
-    types::GMatch,
+    gmatch::GMatch,
+    plugins::refresh_matches,
 };
 
 pub fn setup_main_window(
     app: &impl IsA<gtk::Application>,
     runtime_data: Rc<RefCell<RuntimeData>>,
-) -> gtk::ApplicationWindow {
-    let window = gtk::ApplicationWindow::builder()
-        .application(app)
-        .name(style_names::WINDOW)
-        .default_height(500) // TODO: move to config. Yes, let window be static size
-        .build();
+) -> Rc<gtk::ApplicationWindow> {
+    let width = runtime_data
+        .borrow()
+        .config
+        .width
+        .to_val(runtime_data.borrow().geometry.width().try_into().unwrap());
+    let height = runtime_data
+        .borrow()
+        .config
+        .height
+        .to_val(runtime_data.borrow().geometry.height().try_into().unwrap());
 
-    setup_layer_shell(&window, runtime_data.clone());
+    info!("{} {}", width, height);
+
+    let window = Rc::new(
+        gtk::ApplicationWindow::builder()
+            .application(app)
+            .name(style_names::WINDOW)
+            .default_width(width)
+            .default_height(height)
+            .build(),
+    );
+
+    setup_layer_shell(window.clone(), runtime_data.clone());
+
+    let window_eck = gtk::EventControllerKey::new();
+    connect_window_key_press_events(window.clone(), window_eck, window.clone());
+
     window.present();
     window
 }
 
-fn setup_layer_shell(window: &impl GtkWindowExt, runtime_data: Rc<RefCell<RuntimeData>>) {
+fn setup_layer_shell(window: Rc<impl GtkWindowExt>, runtime_data: Rc<RefCell<RuntimeData>>) {
     window.init_layer_shell();
 
     let config = &runtime_data.borrow().config;
@@ -65,22 +86,68 @@ fn setup_layer_shell(window: &impl GtkWindowExt, runtime_data: Rc<RefCell<Runtim
     window.set_layer(config.layer.into());
 }
 
-pub fn load_custom_css(runtime_data: Rc<RefCell<RuntimeData>>) {
-    let config_dir = &runtime_data.borrow().config_dir;
-    let css_path = config_dir.join("style.css");
+pub fn setup_entry(
+    window: Rc<impl GtkWindowExt>,
+    runtime_data: Rc<RefCell<RuntimeData>>,
+) -> Rc<gtk::SearchEntry> {
+    let entry = Rc::new(
+        gtk::SearchEntry::builder()
+            .hexpand(true)
+            .name(style_names::ENTRY)
+            .placeholder_text("Search")
+            .build(),
+    );
 
-    if fs::metadata(&css_path).is_ok() {
-        info!("Applying custom CSS from {:?}", css_path);
-        let provider = gtk::CssProvider::new();
-        provider.load_from_path(css_path);
+    let entry_eck = gtk::EventControllerKey::new();
+    connect_entry_key_press_events(entry.clone(), entry_eck, window.clone());
 
-        let display = gdk::Display::default().expect("Failed to get GDK display for CSS provider!");
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
+    let debounce_timeout: Rc<RefCell<Option<SourceId>>> = Rc::new(RefCell::new(None));
+    entry.connect_changed(clone!(@strong debounce_timeout => move |e| {
+        if let Some(timeout_id) = debounce_timeout.borrow_mut().take() {
+            timeout_id.remove();
+        }
+
+        runtime_data.borrow_mut().exclusive = None;
+        *debounce_timeout.borrow_mut() = Some(glib::timeout_add_local_once(
+            Duration::from_millis(runtime_data.borrow().config.smooth_input_time),
+            glib::
+            clone!(@weak e, @weak runtime_data, @strong debounce_timeout => move || {
+                *debounce_timeout.borrow_mut() = None;
+                refresh_matches(&e.text(), runtime_data.clone());
+            }),
+        ));
+    }));
+
+    entry
+}
+
+pub fn setup_activation(
+    entry: Rc<gtk::SearchEntry>,
+    main_list: Rc<gtk::ListBox>,
+    window: Rc<impl GtkWindowExt>,
+    runtime_data: Rc<RefCell<RuntimeData>>,
+) {
+    entry.connect_activate(clone!(@weak main_list, @weak window, @weak runtime_data =>
+        move |e| {
+        if let Some(row) = main_list.selected_row() {
+            handle_selection_activation(
+                row.index().try_into().unwrap(),
+                window.clone(),
+                runtime_data.clone(),
+                |_| refresh_matches(&e.text(), runtime_data.clone()),
+            )
+        }
+    }));
+
+    main_list.connect_row_activated(clone!(@weak window, @weak runtime_data, @weak entry =>
+        move |_, row| {
+        handle_selection_activation(
+            row.index().try_into().unwrap(),
+            window.clone(),
+            runtime_data.clone(),
+            |_| refresh_matches(&entry.text(), runtime_data.clone()),
+        )
+    }));
 }
 
 fn connect_key_press_events<F>(
@@ -94,7 +161,7 @@ fn connect_key_press_events<F>(
     event_controller_key.connect_key_pressed(move |_, keyval, _, _| handler(keyval));
 }
 
-pub fn connect_window_key_press_events(
+fn connect_window_key_press_events(
     widget: Rc<impl WidgetExt>,
     event_controller_key: gtk::EventControllerKey,
     window: Rc<impl GtkWindowExt>,
@@ -108,7 +175,7 @@ pub fn connect_window_key_press_events(
     });
 }
 
-pub fn connect_entry_key_press_events(
+fn connect_entry_key_press_events(
     widget: Rc<impl WidgetExt>,
     event_controller_key: gtk::EventControllerKey,
     window: Rc<impl GtkWindowExt>,
@@ -134,7 +201,7 @@ pub fn connect_entry_key_press_events(
     );
 }
 
-pub fn handle_selection_activation<F>(
+fn handle_selection_activation<F>(
     row_id: usize,
     window: Rc<impl GtkWindowExt>,
     runtime_data: Rc<RefCell<RuntimeData>>,
@@ -183,18 +250,6 @@ pub fn configure_main_window(
     main_list: Rc<impl WidgetExt>,
 ) {
     let runtime_data = runtime_data.borrow();
-
-    let width = runtime_data
-        .config
-        .width
-        .to_val(runtime_data.geometry.width().try_into().unwrap());
-    let height = runtime_data
-        .config
-        .height
-        .to_val(runtime_data.geometry.height().try_into().unwrap());
-
-    window.set_width_request(width);
-    window.set_height_request(height);
 
     let main_vbox = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

@@ -6,8 +6,17 @@ use anyrun_interface::Match as RMatch;
 use gtk::{
     gio::prelude::*,
     glib::{self, subclass::prelude::*, ParamSpec},
+    prelude::*,
 };
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
+use crate::{
+    config::{style_names, RuntimeData},
+    utils::{build_image, build_label},
+};
 
 mod imp {
     use super::*;
@@ -200,6 +209,86 @@ impl GMatch {
     pub fn set_first(&self, value: bool) {
         self.set_property("first", value);
     }
+
+    pub fn to_widget(&self, runtime_data: Rc<RefCell<RuntimeData>>) -> gtk::Widget {
+        let runtime_data = runtime_data.borrow();
+        let plugin = runtime_data
+            .plugins
+            .get(self.get_plugin_id() as usize)
+            .expect("Can't get plugin by id");
+
+        let hbox = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .height_request(36)
+            .spacing(4)
+            .build();
+
+        let plugin_info_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            // .halign(gtk::Align::Center)
+            .width_request(200)
+            .spacing(12)
+            .build();
+
+        let plugin_info = plugin.info()();
+
+        let plugin_icon = build_image(&plugin_info.icon);
+        plugin_icon.set_margin_start(4);
+        plugin_icon.set_margin_end(8);
+        plugin_info_box.append(&plugin_icon);
+
+        plugin_icon.set_visible(!runtime_data.config.hide_plugins_icons && self.get_first());
+
+        let plugin_label = gtk::Label::builder()
+            .label(if self.get_first() {
+                &plugin_info.name
+            } else {
+                ""
+            })
+            .build();
+
+        plugin_info_box.append(&plugin_label);
+
+        plugin_info_box.set_visible(!runtime_data.config.hide_plugin_info);
+
+        hbox.append(&plugin_info_box);
+
+        let match_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(12)
+            .build();
+
+        if !runtime_data.config.hide_match_icons {
+            if let Some(icon) = self.get_icon() {
+                match_box.append(&build_image(&icon));
+            }
+        }
+
+        let vbox = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+
+        vbox.append(&build_label(
+            style_names::MATCH_TITLE,
+            self.get_use_pango(),
+            &self.get_title(),
+        ));
+
+        if let Some(desc) = self.get_description() {
+            vbox.append(&build_label(
+                style_names::MATCH_DESC,
+                self.get_use_pango(),
+                &desc,
+            ));
+        }
+
+        match_box.append(&vbox);
+        hbox.append(&match_box);
+
+        hbox.into()
+    }
 }
 
 impl Default for GMatch {
@@ -208,6 +297,7 @@ impl Default for GMatch {
     }
 }
 
+// workaround to get some representasion because there is already `Debug` for `glib::Object`
 impl std::fmt::Display for GMatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GMatch")

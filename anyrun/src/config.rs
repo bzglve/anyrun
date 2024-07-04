@@ -185,13 +185,6 @@ pub struct Args {
     pub config: ConfigArgs,
 }
 
-// Enum for positions
-#[derive(Deserialize, Clone, Copy, ValueEnum)]
-enum Position {
-    Top,
-    Center,
-}
-
 // Enum for actions after GTK has finished
 pub enum PostRunAction {
     Copy(Vec<u8>),

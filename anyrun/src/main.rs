@@ -1,25 +1,25 @@
 mod config;
+mod gmatch;
 mod plugins;
-mod types;
 mod ui;
+mod utils;
 
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{cell::RefCell, rc::Rc};
 
-use anyrun_interface::PluginRef as Plugin;
 use clap::Parser;
+use gmatch::GMatch;
 use gtk::{
     gdk, gio,
-    glib::{self, clone, SourceId},
+    glib::{self, clone},
     prelude::*,
 };
+#[allow(unused_imports)]
 use log::*;
-use nix::unistd;
 
 use config::*;
 use plugins::*;
-use types::*;
 use ui::*;
-use wl_clipboard_rs::copy;
+use utils::*;
 
 fn main() -> Result<glib::ExitCode, glib::Error> {
     env_logger::init();
@@ -84,32 +84,6 @@ fn main() -> Result<glib::ExitCode, glib::Error> {
     Ok(exit_code)
 }
 
-fn handle_post_run_action(runtime_data: Rc<RefCell<RuntimeData>>) {
-    if let PostRunAction::Copy(bytes) = &runtime_data.borrow().post_run_action {
-        match unsafe { unistd::fork() } {
-            Ok(unistd::ForkResult::Parent { .. }) => {
-                info!("Child spawned to serve copy requests.");
-            }
-            Ok(unistd::ForkResult::Child) => {
-                serve_copy_requests(bytes);
-            }
-            Err(why) => {
-                error!("Failed to fork for copy sharing: {}", why);
-            }
-        }
-    }
-}
-
-fn serve_copy_requests(bytes: &[u8]) {
-    let mut opts = copy::Options::new();
-    opts.foreground(true);
-    opts.copy(
-        copy::Source::Bytes(bytes.to_vec().into_boxed_slice()),
-        copy::MimeType::Autodetect,
-    )
-    .expect("Failed to serve copy bytes");
-}
-
 fn activate(app: &impl IsA<gtk::Application>, runtime_data: Rc<RefCell<RuntimeData>>) {
     load_custom_css(runtime_data.clone());
 
@@ -125,65 +99,39 @@ fn activate(app: &impl IsA<gtk::Application>, runtime_data: Rc<RefCell<RuntimeDa
     main_list.bind_model(
         Some(&list_store),
         clone!(@strong runtime_data => move |match_row| {
-            build_match_box(
-                runtime_data.clone(),
-                match_row
-                    .clone()
-                    .downcast::<GMatch>()
-                    .expect("Can't downcast glib::Object to GMatch"),
-            )
+            match_row
+                .clone()
+                .downcast::<GMatch>()
+                .expect("Can't downcast glib::Object to GMatch")
+                .to_widget(runtime_data.clone())
         }),
     );
 
-    let app_state = runtime_data.borrow().app_state.clone();
+    let window = setup_main_window(app, runtime_data.clone());
 
-    let entry = Rc::new(
-        gtk::SearchEntry::builder()
-            .hexpand(true)
-            .name(style_names::ENTRY)
-            .placeholder_text("Search")
-            .build(),
-    );
+    let entry = setup_entry(window.clone(), runtime_data.clone());
+
     if runtime_data.borrow().config.save_entry_state {
+        let app_state = runtime_data.borrow().app_state.clone();
         entry.set_text(&app_state.string("entry-state"));
         app_state.bind("entry-state", &*entry, "text").build();
     }
 
     list_store.connect_items_changed(
-        clone!(@weak entry, @weak main_list, @weak runtime_data => move |_, _, _, _| {
+        clone!(@weak entry, @strong main_list, @weak runtime_data => move |_, _, _, _| {
             main_list.select_row(main_list.row_at_index(0).as_ref())
         }),
     );
 
-    let window = Rc::new(setup_main_window(app, runtime_data.clone()));
-
-    let entry_eck = gtk::EventControllerKey::new();
-    connect_entry_key_press_events(entry.clone(), entry_eck, window.clone());
-
-    let window_eck = gtk::EventControllerKey::new();
-    connect_window_key_press_events(window.clone(), window_eck, window.clone());
-
-    let plugins = runtime_data.clone().borrow().plugins.clone();
-
-    setup_entry_changed(entry.clone(), runtime_data.clone(), plugins.clone());
-    setup_entry_activated(
+    setup_activation(
         entry.clone(),
         main_list.clone(),
         window.clone(),
         runtime_data.clone(),
-        plugins.clone(),
-    );
-
-    setup_row_activated(
-        main_list.clone(),
-        window.clone(),
-        runtime_data.clone(),
-        entry.clone(),
-        plugins.clone(),
     );
 
     if runtime_data.borrow().config.show_results_immediately {
-        refresh_matches(&entry.text(), &plugins, runtime_data.clone());
+        refresh_matches(&entry.text(), runtime_data.clone());
     }
 
     configure_main_window(
@@ -194,63 +142,4 @@ fn activate(app: &impl IsA<gtk::Application>, runtime_data: Rc<RefCell<RuntimeDa
     );
 
     window.present();
-}
-
-fn setup_entry_changed(
-    entry: Rc<gtk::SearchEntry>,
-    runtime_data: Rc<RefCell<RuntimeData>>,
-    plugins: Vec<Plugin>,
-) {
-    let debounce_timeout: Rc<RefCell<Option<SourceId>>> = Rc::new(RefCell::new(None));
-
-    entry.connect_changed(clone!(@strong debounce_timeout => move |e| {
-        if let Some(timeout_id) = debounce_timeout.borrow_mut().take() {
-            timeout_id.remove();
-        }
-
-        runtime_data.borrow_mut().exclusive = None;
-        *debounce_timeout.borrow_mut() = Some(glib::timeout_add_local_once(
-            Duration::from_millis(runtime_data.borrow().config.smooth_input_time),
-            clone!(@weak e, @strong plugins, @weak runtime_data, @strong debounce_timeout => move || {
-                *debounce_timeout.borrow_mut() = None;
-                refresh_matches(&e.text(), &plugins, runtime_data.clone());
-            }),
-        ));
-    }));
-}
-
-fn setup_entry_activated(
-    entry: Rc<gtk::SearchEntry>,
-    main_list: Rc<gtk::ListBox>,
-    window: Rc<gtk::ApplicationWindow>,
-    runtime_data: Rc<RefCell<RuntimeData>>,
-    plugins: Vec<Plugin>,
-) {
-    entry.connect_activate(move |e| {
-        if let Some(row) = main_list.selected_row() {
-            handle_selection_activation(
-                row.index().try_into().unwrap(),
-                window.clone(),
-                runtime_data.clone(),
-                |_| refresh_matches(&e.text(), &plugins, runtime_data.clone()),
-            )
-        }
-    });
-}
-
-fn setup_row_activated(
-    main_list: Rc<gtk::ListBox>,
-    window: Rc<gtk::ApplicationWindow>,
-    runtime_data: Rc<RefCell<RuntimeData>>,
-    entry: Rc<gtk::SearchEntry>,
-    plugins: Vec<Plugin>,
-) {
-    main_list.connect_row_activated(move |_, row| {
-        handle_selection_activation(
-            row.index().try_into().unwrap(),
-            window.clone(),
-            runtime_data.clone(),
-            |_| refresh_matches(&entry.text(), &plugins, runtime_data.clone()),
-        )
-    });
 }
