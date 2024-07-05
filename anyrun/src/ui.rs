@@ -46,7 +46,6 @@ pub fn setup_main_window(
     let window_eck = gtk::EventControllerKey::new();
     connect_window_key_press_events(window.clone(), window_eck, window.clone());
 
-    window.present();
     window
 }
 

@@ -181,8 +181,19 @@ pub struct Args {
     /// Override the path to the config directory
     #[arg(short, long)]
     pub config_dir: Option<String>,
+
     #[command(flatten)]
     pub config: ConfigArgs,
+
+    #[clap(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Parser, Debug)]
+pub enum Command {
+    Daemon,
+    Show,
+    Hide,
 }
 
 // Enum for actions after GTK has finished
