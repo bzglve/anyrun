@@ -1,11 +1,14 @@
 use std::{cell::RefCell, fs, path::PathBuf, rc::Rc};
 
-use gtk::gdk;
+use gtk::{gdk, gio, prelude::InputStreamExtManual};
 use log::*;
 use nix::unistd;
 use wl_clipboard_rs::copy;
 
-use crate::config::{style_names, PostRunAction, RuntimeData};
+use crate::{
+    config::{style_names, PostRunAction, RuntimeData},
+    SOCKET_BUF_SIZE,
+};
 
 fn serve_copy_requests(bytes: &[u8]) {
     let mut opts = copy::Options::new();
@@ -77,4 +80,13 @@ pub fn build_image(icon: &str) -> gtk::Image {
         match_image.icon_name(icon)
     };
     match_image.build()
+}
+
+pub fn read_from_stream(stream: &impl InputStreamExtManual) -> String {
+    let mut buf = [0; SOCKET_BUF_SIZE];
+    let _count = stream.read(&mut buf, gio::Cancellable::NONE);
+    String::from_utf8(buf.to_vec())
+        .expect("Can't get string from bytes array")
+        .trim_matches(char::from(0))
+        .to_owned()
 }

@@ -13,6 +13,7 @@ use crate::{
     config::{style_names, Edge, PostRunAction, RelativeNum, RuntimeData},
     gmatch::GMatch,
     plugins::refresh_matches,
+    send_command,
 };
 
 pub fn setup_main_window(
@@ -44,7 +45,7 @@ pub fn setup_main_window(
     setup_layer_shell(window.clone(), runtime_data.clone());
 
     let window_eck = gtk::EventControllerKey::new();
-    connect_window_key_press_events(window.clone(), window_eck, window.clone());
+    connect_window_key_press_events(window.clone(), window_eck);
 
     window
 }
@@ -85,10 +86,7 @@ fn setup_layer_shell(window: Rc<impl GtkWindowExt>, runtime_data: Rc<RefCell<Run
     window.set_layer(config.layer.into());
 }
 
-pub fn setup_entry(
-    window: Rc<impl GtkWindowExt>,
-    runtime_data: Rc<RefCell<RuntimeData>>,
-) -> Rc<gtk::SearchEntry> {
+pub fn setup_entry(runtime_data: Rc<RefCell<RuntimeData>>) -> Rc<gtk::SearchEntry> {
     let entry = Rc::new(
         gtk::SearchEntry::builder()
             .hexpand(true)
@@ -98,7 +96,7 @@ pub fn setup_entry(
     );
 
     let entry_eck = gtk::EventControllerKey::new();
-    connect_entry_key_press_events(entry.clone(), entry_eck, window.clone());
+    connect_entry_key_press_events(entry.clone(), entry_eck);
 
     let debounce_timeout: Rc<RefCell<Option<SourceId>>> = Rc::new(RefCell::new(None));
     entry.connect_changed(clone!(@strong debounce_timeout => move |e| {
@@ -109,7 +107,6 @@ pub fn setup_entry(
         runtime_data.borrow_mut().exclusive = None;
         *debounce_timeout.borrow_mut() = Some(glib::timeout_add_local_once(
             Duration::from_millis(runtime_data.borrow().config.smooth_input_time),
-            glib::
             clone!(@weak e, @weak runtime_data, @strong debounce_timeout => move || {
                 *debounce_timeout.borrow_mut() = None;
                 refresh_matches(&e.text(), runtime_data.clone());
@@ -123,26 +120,23 @@ pub fn setup_entry(
 pub fn setup_activation(
     entry: Rc<gtk::SearchEntry>,
     main_list: Rc<gtk::ListBox>,
-    window: Rc<impl GtkWindowExt>,
     runtime_data: Rc<RefCell<RuntimeData>>,
 ) {
-    entry.connect_activate(clone!(@weak main_list, @weak window, @weak runtime_data =>
+    entry.connect_activate(clone!(@strong main_list, @weak runtime_data =>
         move |e| {
         if let Some(row) = main_list.selected_row() {
             handle_selection_activation(
                 row.index().try_into().unwrap(),
-                window.clone(),
                 runtime_data.clone(),
                 |_| refresh_matches(&e.text(), runtime_data.clone()),
             )
         }
     }));
 
-    main_list.connect_row_activated(clone!(@weak window, @weak runtime_data, @weak entry =>
+    main_list.connect_row_activated(clone!(@strong entry, @weak runtime_data =>
         move |_, row| {
         handle_selection_activation(
             row.index().try_into().unwrap(),
-            window.clone(),
             runtime_data.clone(),
             |_| refresh_matches(&entry.text(), runtime_data.clone()),
         )
@@ -163,11 +157,10 @@ fn connect_key_press_events<F>(
 fn connect_window_key_press_events(
     widget: Rc<impl WidgetExt>,
     event_controller_key: gtk::EventControllerKey,
-    window: Rc<impl GtkWindowExt>,
 ) {
     connect_key_press_events(widget, event_controller_key, move |keyval| match keyval {
         Key::Escape => {
-            window.close();
+            send_command("hide");
             glib::Propagation::Stop
         }
         _ => glib::Propagation::Proceed,
@@ -177,14 +170,13 @@ fn connect_window_key_press_events(
 fn connect_entry_key_press_events(
     widget: Rc<impl WidgetExt>,
     event_controller_key: gtk::EventControllerKey,
-    window: Rc<impl GtkWindowExt>,
 ) {
     connect_key_press_events(
         widget.clone(),
         event_controller_key,
         move |keyval| match keyval {
             Key::Escape => {
-                window.close();
+                send_command("hide");
                 glib::Propagation::Stop
             }
             Key::Down | Key::Up => {
@@ -202,7 +194,6 @@ fn connect_entry_key_press_events(
 
 fn handle_selection_activation<F>(
     row_id: usize,
-    window: Rc<impl GtkWindowExt>,
     runtime_data: Rc<RefCell<RuntimeData>>,
     mut on_refresh: F,
 ) where
@@ -224,20 +215,20 @@ fn handle_selection_activation<F>(
         .expect("Can't get plugin");
 
     match plugin.handle_selection()(rmatch) {
-        HandleResult::Close => window.close(),
+        HandleResult::Close => send_command("hide"),
         HandleResult::Refresh(exclusive) => {
             runtime_data.borrow_mut().exclusive = if exclusive { Some(plugin) } else { None };
             on_refresh(exclusive);
         }
         HandleResult::Copy(bytes) => {
             runtime_data.borrow_mut().post_run_action = PostRunAction::Copy(bytes.into());
-            window.close();
+            send_command("hide");
         }
         HandleResult::Stdout(bytes) => {
             if let Err(why) = io::Write::write_all(&mut io::stdout().lock(), &bytes) {
                 error!("Error outputting content to stdout: {}", why);
             }
-            window.close();
+            send_command("hide");
         }
     }
 }

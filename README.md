@@ -262,7 +262,7 @@ See [Plugin_development.md](docs/Plugin_development.md)
   - [ ] `? <plugin>` should return some plugin usage (maybe based on it's config)
 - [x] Select first match by default as it is has default activate
 - [ ] Interface for plugin to request how to display it (for example to have small clipboard history images)
-- [ ] Add something like daemon mode to make launch faster. Instead of loading all libs and stuff every time we need just open/hide window using daemon
+- [x]] Add something like daemon mode to make launch faster. Instead of loading all libs and stuff every time we need just open/hide window using daemon ([comments](#daemon-mode))
 - [ ] CI/CD
   - [ ] Security audit
     - [ ] doesn't even get to the next step
@@ -282,3 +282,26 @@ I hope I'm wrong about this and just couldn't find the correct information. (hel
 Plugin grabbing exclusivity can implement menu differently from state to state (wm windows or calling some api for example)
 
 So saving exclusive plugin state can be some king of unstable
+
+#### Daemon mode
+
+Anyrun can be started in daemon mode hidden
+
+It makes launch faster and prevents anyrun from loading all stuff every time
+
+for help how to use it you can call `--help` flag or `help` command
+
+```bash
+anyrun --help  # like that
+anyrun help  # or maybe like that
+# it works both
+```
+
+> [!WARNING]
+>
+> for nixos users I'd recommend not to use it, because of postrunactions that works with copy events.
+>
+> I cannot realy test it, so If you wanna try it, do it on your own risk.
+>
+> In any case, whether it works or not, please leave feedback on this on the issue page
+>

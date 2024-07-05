@@ -65,6 +65,16 @@ Config(
     // Default: 0
     smooth_input_time: 200,
 
+    // Anyrun can be run in daemon mode so you don't have to load plugins and stuff every time
+    // for usage checkout `anyrun --help`
+    // also you can use the `--daemon` flag instead of a persistent configuration
+    // 
+    // [!WARNING]
+    // for nixos users I'd recommend not to use it, because of postrunactions that works with copy events.
+    // I cannot realy test it, so If you wanna try it, do it on your own risk.
+    // In any case, whether it works or not, please leave feedback on this on the issue page
+    daemon: false,
+
     // List of plugins to be loaded by default, can be specified with a relative path to be loaded from the
     // `<anyrun config dir>/plugins` directory or with an absolute path to just load the file the path points to.
     plugins: [

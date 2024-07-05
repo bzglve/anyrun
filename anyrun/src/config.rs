@@ -49,6 +49,9 @@ pub struct Config {
 
     #[serde(default)]
     pub smooth_input_time: u64,
+
+    #[serde(default)]
+    pub daemon: bool,
 }
 
 impl Config {
@@ -92,6 +95,7 @@ impl Default for Config {
             bottom_entry: false,
             save_entry_state: false,
             smooth_input_time: 0,
+            daemon: false,
         }
     }
 }
@@ -191,9 +195,10 @@ pub struct Args {
 
 #[derive(Parser, Debug)]
 pub enum Command {
-    Daemon,
+    Toggle,
     Show,
     Hide,
+    Close,
 }
 
 // Enum for actions after GTK has finished
@@ -229,6 +234,7 @@ pub mod style_names {
 }
 
 pub const APP_ID: &str = "com.kirottu.anyrun";
+pub const SOCKET_BUF_SIZE: usize = 1024;
 
 pub fn default_config_dir() -> PathBuf {
     let dirs = glib::system_config_dirs();
@@ -287,4 +293,8 @@ pub fn determine_config_dir(config_dir_arg: &Option<String>) -> PathBuf {
         return user_dir;
     }
     default_config_dir()
+}
+
+pub fn socket_path() -> PathBuf {
+    glib::user_runtime_dir().join(format!("{}.sock", APP_ID))
 }
